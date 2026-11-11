@@ -163,6 +163,7 @@ const store = {
   set(k, v){ try { localStorage.setItem("ups_"+k, v); } catch(e){} }
 };
 const DEMO = /[?&]demo/.test(location.search);
+const ALL  = /[?&]all/.test(location.search);   /* ?all - show every BLE device, for testing with another Espruino */
 
 let dev=null, tx=null, connecting=false, wantConn=false, writeChain=Promise.resolve();
 let rxBuf="", lineBuf="", data=null, lastData=0, pollTm=null, hideTm=null, reTm=null, connTime=0;
@@ -283,7 +284,9 @@ async function waitAdv(d){
 async function pick(){
   if (!navigator.bluetooth) { setConn("off","Этот браузер не умеет Bluetooth. Нужен Chrome на Android/компьютере, на iPhone — приложение Bluefy."); return; }
   try {
-    const d = await navigator.bluetooth.requestDevice({filters:[{namePrefix:NAME_PREFIX}], optionalServices:UARTS.map(x=>x[0])});
+    const opt = ALL ? {acceptAllDevices:true} : {filters:[{namePrefix:NAME_PREFIX}]};
+    opt.optionalServices = UARTS.map(x=>x[0]);
+    const d = await navigator.bluetooth.requestDevice(opt);
     if (tx && dev && dev!==d) { try{dev.gatt.disconnect();}catch(_){} tx=null; }
     dev = null; connect(d);
   } catch(e){ if (e.name!=="NotFoundError") setConn("off","Ошибка: "+e.message); }
