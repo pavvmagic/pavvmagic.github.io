@@ -128,9 +128,9 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
         <div class="btns" style="margin-top:8px">
           <button class="sec sm" id="btnCal">Калибровать при следующем заряде</button>
         </div>
-        <h3>Тихий режим инвертора</h3>
+        <h3>Режим fault инвертора</h3>
         <div class="btns">
-          <button class="sec sm" id="btnQuiet">Текущая ошибка инвертора = тихий режим</button>
+          <button class="sec sm" id="btnQuiet">Текущие флаги инвертора = режим fault (норма)</button>
           <button class="sec sm" id="btnQuiet0">Сбросить</button>
         </div>
         <h3>Терминал</h3>
@@ -378,6 +378,7 @@ function render(){
   const offLeftH = Math.max(0, d.wf - (ac?0:age/3600));
   const ovl = d.iv && d.iv[4], fault = d.iv && d.iv[5];
   const fm = d.iv ? (d.iv[6]||0) : 0, quiet = d.iv && d.iv[7], noOut = d.iv && d.iv[8];
+  const invOk = d.iv && !fm;          /* with fault bits the inverter readings are not valid */
   const badBits = fm & ~(d.iq||0);
 
   /* alerts */
@@ -396,7 +397,7 @@ function render(){
   $("cAc").className = "card ac " + (ac ? "on" : "off");
   $("acTxt").textContent = ac ? "Свет есть" : "Света нет";
   $("acSub").textContent = "уже " + hm(age) + (ac ? "" : " — работаем от батареи")
-    + (ac && quiet ? ". Тихий режим: если свет отключат, будет пауза ~3 с" : "");
+    + (ac && quiet ? ". Режим fault: если свет отключат, будет пауза ~3 с" : "");
 
   /* battery */
   $("soc").textContent = soc + "%";
@@ -407,7 +408,7 @@ function render(){
   if (ac && d.rl && d.ib > 0.5) flow = "Заряжается, " + n1(d.ib) + " А";
   else if (ac && soc >= 97) flow = "Батарея заряжена";
   else if (ac) flow = "Ждёт, заряд не нужен";
-  else flow = "Расход " + n1(-d.ib) + " А" + (d.iv ? ", нагрузка " + d.iv[0] + "%" : "");
+  else flow = "Расход " + n1(-d.ib) + " А" + (invOk ? ", нагрузка " + d.iv[0] + "%" : "");
   $("flow").textContent = flow;
 
   /* details */
@@ -441,8 +442,10 @@ function render(){
   const hmax = Math.max(1,...hs.map(x=>x[1]));
   $("hist").innerHTML = hs.map(([c,v])=>`<i class="${c}" style="height:${Math.max(4,v/hmax*100)}%" title="${hh(v)}"></i>`).join("");
   rows($("tInv"), d.iv ? [
-    ["Состояние", fault ? "ошибка: "+bitNames(badBits) : quiet ? "тихий режим ("+bitNames(fm)+")" : "норма"],
-    ["Нагрузка", d.iv[0]+"%"], ["Выход", d.iv[1]+" В"], ["Сеть на входе", d.iv[2]+" В"], ["Температура", n1(d.iv[3])+" °C"]
+    ["Состояние", fault ? "ошибка: "+bitNames(badBits) : quiet ? "режим fault, это норма" : "норма"],
+    ["Флаги", fm ? bitNames(fm) : "—"],
+    ...(invOk ? [["Нагрузка", d.iv[0]+"%"], ["Выход", d.iv[1]+" В"], ["Сеть на входе", d.iv[2]+" В"], ["Температура", n1(d.iv[3])+" °C"]]
+              : [["Показания", "недостоверны при флагах ошибки"]])
   ] : [["Нет данных по RS232",""]]);
   document.querySelectorAll("#prof button").forEach(b=>{
     const p = +b.dataset.p;
@@ -463,10 +466,10 @@ document.querySelectorAll("#prof button").forEach(b=> b.onclick = () => {
 });
 $("btnQuiet").onclick = () => {
   const fm = data && data.iv ? (data.iv[6]||0) : 0;
-  if (!fm) { alert("Сейчас инвертор не сообщает ошибок. Сначала включите тихий режим кнопкой инвертора."); return; }
+  if (!fm) { alert("Сейчас инвертор не сообщает ошибок. Сначала переведите его в режим fault кнопкой."); return; }
   if (confirm("Считать нормой: "+bitNames(fm)+"?")) { cmd("invq()"); setTimeout(()=>cmd("js()"),500); }
 };
-$("btnQuiet0").onclick = () => { if (confirm("Сбросить тихий режим? Ошибки инвертора снова будут красными.")) { cmd("invq(0)"); setTimeout(()=>cmd("js()"),500); } };
+$("btnQuiet0").onclick = () => { if (confirm("Сбросить режим fault? Эти флаги инвертора снова будут красными.")) { cmd("invq(0)"); setTimeout(()=>cmd("js()"),500); } };
 $("btnCal").onclick = () => { if (confirm("Сделать калибровку при следующем заряде?")) { cmd("cal()"); setTimeout(()=>cmd("js()"),500); } };
 $("pwd").value = store.get("pass", DEF_PASS);
 $("pwd").onchange = () => { store.set("pass", $("pwd").value); if (tx) bleWrite($("pwd").value+"\n"); };
@@ -494,7 +497,7 @@ if (DEMO) {
     data = {v:"9MV",up:86400*3+t*5,ac:ac?1:0,ae:4300+t*5,st:ac?"ac_powered_charg_on":"battery_powered",pf:1,fo:-1,cr:0,rl:ac?1:0,
       is:43,vs:13.9,io:ac?41.8:-1,vo:ac?13.52:-1,wy:"start",bk:1,sc:[ac?68:31,ac?71:33],rm:ac?139:64,nm:200,ib:ac?41.8:-9.4,vb:ac?13.52:13.12,
       c0:[3392,3401,3388,3395],c1:[3388,3412,3390,3391],tp:[21,22],cy:[154,149],ld:9.6,wn:2,wf:10,tg:100,
-      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,iv:[ac?0:7,230,ac?224:0,36,0,0,65536,1,0],iq:65536,ut:Math.round(Date.now()/1000)};
+      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,iv:[0,0,0,0,0,0,(1<<16)|(1<<18),1,0],iq:(1<<16)|(1<<18),ut:Math.round(Date.now()/1000)};
     lastData = Date.now(); render();
   };
   tick(); setInterval(tick, 3000); setConn("on");
