@@ -128,6 +128,11 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
         <div class="btns" style="margin-top:8px">
           <button class="sec sm" id="btnCal">Калибровать при следующем заряде</button>
         </div>
+        <h3>Тихий режим инвертора</h3>
+        <div class="btns">
+          <button class="sec sm" id="btnQuiet">Текущая ошибка инвертора = тихий режим</button>
+          <button class="sec sm" id="btnQuiet0">Сбросить</button>
+        </div>
         <h3>Терминал</h3>
         <div class="term">
           <input id="cmd" placeholder="st()" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -166,6 +171,7 @@ const DEMO = /[?&]demo/.test(location.search);
 const ALL  = /[?&]all/.test(location.search);   /* ?all - show every BLE device, for testing with another Espruino */
 
 let dev=null, tx=null, connecting=false, wantConn=false, writeChain=Promise.resolve();
+let needSync=false;
 let rxBuf="", lineBuf="", data=null, lastData=0, pollTm=null, hideTm=null, reTm=null, connTime=0;
 
 /* ===== log / terminal ===== */
@@ -180,7 +186,7 @@ function onRx(str){
   while ((m = rxBuf.match(/@@(\{[\s\S]*?\})@@/))) {
     const pre = rxBuf.slice(0, m.index);
     rxText(pre);
-    try { data = JSON.parse(m[1]); lastData = Date.now(); render(); } catch(e){ log("JSON error: "+e.message); }
+    try { data = JSON.parse(m[1]); lastData = Date.now(); clockCheck(); render(); } catch(e){ log("JSON error: "+e.message); }
     rxBuf = rxBuf.slice(m.index + m[0].length);
   }
   const k = rxBuf.lastIndexOf("@@");
@@ -241,6 +247,7 @@ async function connect(d){
     await new Promise(res=>setTimeout(res,300));
     if (pass) await bleWrite(pass+"\n");      /* unlock console */
     await new Promise(res=>setTimeout(res,300));
+    needSync = true;
     startPoll();
   } catch(e){
     tx = null;
@@ -296,6 +303,31 @@ function disconnect(){
   if (dev) { try { dev.gatt.disconnect(); } catch(_){} }
   tx = null; setConn("off","Отключено");
 }
+/* measure device clock error on first data after connect, then sync (firmware ignores < 30 s) */
+function clockCheck(){
+  if (!needSync || DEMO || data.ut===undefined) return;
+  needSync = false;
+  const now = Date.now()/1000;
+  if (data.ut > 1.6e9) {
+    const drift = data.ut - now;                     /* + device ahead, - behind */
+    const last = +store.get("syncAt", 0);
+    store.set("drift", drift.toFixed(1));
+    store.set("driftAt", Math.round(now));
+    if (last && now-last > 6*3600) store.set("rate", (drift/((now-last)/86400)).toFixed(1));
+    if (Math.abs(drift) >= 30) store.set("syncAt", Math.round(now));
+  } else {
+    store.set("syncAt", Math.round(now)); store.set("drift",""); store.set("rate","");
+  }
+  cmd("syncT("+Math.round(Date.now()/1000)+","+(-new Date().getTimezoneOffset()/60)+")");
+}
+function clockText(){
+  const dr = store.get("drift",""), rate = store.get("rate",""), at = +store.get("syncAt",0);
+  if (dr==="") return at ? "синхронизированы" : "—";
+  let s = (dr>0?"+":"")+dr+" с";
+  if (rate!=="") s += ", уход "+(rate>0?"+":"")+rate+" с/сут";
+  else if (at) s += " за "+hm(Date.now()/1000-at);
+  return s;
+}
 function startPoll(){
   stopPoll();
   const p = Math.max(2, Math.min(60, +store.get("poll", 5) || 5));
@@ -326,6 +358,10 @@ function hm(sec){
 function hh(h){ return h==null ? "—" : hm(h*3600); }
 const n1 = v => (v==null || isNaN(v)) ? "—" : (+v).toFixed(1);
 const PROF = ["стандарт","турбо","калибровка"];
+/* Q status flag bit -> text (bits treated as faults by firmware) */
+const INV_BITS = {6:"батарея разряжена",7:"отключение: батарея исчерпана",8:"перенапряжение батареи",9:"удалённое отключение",
+  13:"перегрев",14:"низкое напряжение инвертора",15:"высокое напряжение инвертора",16:"авария инвертора",17:"ошибка памяти EEPROM",18:"система отключена"};
+function bitNames(m){ const r=[]; for (const k in INV_BITS) if (m & (1<<k)) r.push(INV_BITS[k]); return r.join(", "); }
 const WHY = {start:"выбран на старте", cell:"снижен: разбег ячеек", hi:"снижен: ячейка высоко", late:"повышен: не успеваем", nobms:"нет данных BMS", "":"—"};
 const STATE = {ac_powered_charg_on:"заряжает", ac_powered_charg_off:"ожидание", battery_powered:"работа от батареи", start:"запуск"};
 function rows(el, list){ el.innerHTML = list.map(([a,b])=>`<tr><td>${a}</td><td>${b}</td></tr>`).join(""); }
@@ -341,12 +377,15 @@ function render(){
   const leftH = d.rm / Math.max(dis, 0.5);
   const offLeftH = Math.max(0, d.wf - (ac?0:age/3600));
   const ovl = d.iv && d.iv[4], fault = d.iv && d.iv[5];
+  const fm = d.iv ? (d.iv[6]||0) : 0, quiet = d.iv && d.iv[7], noOut = d.iv && d.iv[8];
+  const badBits = fm & ~(d.iq||0);
 
   /* alerts */
   const al = [];
   if (stale) al.push(["warn", tx ? "Нет свежих данных от ИБП. Проверьте пароль в «Подробно → Настройки»." : "Нет связи с ИБП. Показаны последние данные."]);
   if (ovl) al.push(["bad","Перегрузка! Выключите мощные приборы: чайник, кондиционер, хлебопечку."]);
-  if (fault) al.push(["bad","Инвертор сообщает об ошибке."]);
+  if (noOut) al.push(["bad","Инвертор не выдаёт напряжение на розетки."]);
+  if (fault) al.push(["bad","Инвертор: "+(bitNames(badBits)||"ошибка")+"."]);
   if (!d.bk) al.push(["warn","Нет связи с батареями (BMS). Цифры заряда могут быть неточными."]);
   if (!ac && soc < LOW_BAD) al.push(["bad","Заряд почти кончился — пора запускать генератор."]);
   else if (!ac && soc < LOW_WARN) al.push(["warn","Заряда осталось мало. Не включайте мощные приборы."]);
@@ -356,7 +395,8 @@ function render(){
   /* AC card */
   $("cAc").className = "card ac " + (ac ? "on" : "off");
   $("acTxt").textContent = ac ? "Свет есть" : "Света нет";
-  $("acSub").textContent = (ac ? "уже " : "уже ") + hm(age) + (ac ? "" : " — работаем от батареи");
+  $("acSub").textContent = "уже " + hm(age) + (ac ? "" : " — работаем от батареи")
+    + (ac && quiet ? ". Тихий режим: если свет отключат, будет пауза ~3 с" : "");
 
   /* battery */
   $("soc").textContent = soc + "%";
@@ -393,13 +433,15 @@ function render(){
     ["Отключение, не больше", hh(d.wf)],
     ["Средний расход", n1(d.ld)+" А"],
     ["До калибровки", d.cn+"/"+d.cN+" окон, "+d.ch+"/"+d.cH+" ч"],
-    ["Зарядов / калибровок / перегрузок", d.ng+" / "+d.nc+" / "+d.no]
+    ["Зарядов / калибровок / перегрузок", d.ng+" / "+d.nc+" / "+d.no],
+    ["Часы устройства", clockText()]
   ]);
   const hs = [];
   for (let i=0;i<Math.max(d.hn.length,d.hf.length);i++){ if (d.hn[i]!=null) hs.push(["on",d.hn[i]]); if (d.hf[i]!=null) hs.push(["off",d.hf[i]]); }
   const hmax = Math.max(1,...hs.map(x=>x[1]));
   $("hist").innerHTML = hs.map(([c,v])=>`<i class="${c}" style="height:${Math.max(4,v/hmax*100)}%" title="${hh(v)}"></i>`).join("");
   rows($("tInv"), d.iv ? [
+    ["Состояние", fault ? "ошибка: "+bitNames(badBits) : quiet ? "тихий режим ("+bitNames(fm)+")" : "норма"],
     ["Нагрузка", d.iv[0]+"%"], ["Выход", d.iv[1]+" В"], ["Сеть на входе", d.iv[2]+" В"], ["Температура", n1(d.iv[3])+" °C"]
   ] : [["Нет данных по RS232",""]]);
   document.querySelectorAll("#prof button").forEach(b=>{
@@ -419,6 +461,12 @@ document.querySelectorAll("#prof button").forEach(b=> b.onclick = () => {
   if (p===2 && !confirm("Включить калибровку (полный заряд до 14,4 В)?")) return;
   cmd("pr("+p+")"); setTimeout(()=>cmd("js()"), 500);
 });
+$("btnQuiet").onclick = () => {
+  const fm = data && data.iv ? (data.iv[6]||0) : 0;
+  if (!fm) { alert("Сейчас инвертор не сообщает ошибок. Сначала включите тихий режим кнопкой инвертора."); return; }
+  if (confirm("Считать нормой: "+bitNames(fm)+"?")) { cmd("invq()"); setTimeout(()=>cmd("js()"),500); }
+};
+$("btnQuiet0").onclick = () => { if (confirm("Сбросить тихий режим? Ошибки инвертора снова будут красными.")) { cmd("invq(0)"); setTimeout(()=>cmd("js()"),500); } };
 $("btnCal").onclick = () => { if (confirm("Сделать калибровку при следующем заряде?")) { cmd("cal()"); setTimeout(()=>cmd("js()"),500); } };
 $("pwd").value = store.get("pass", DEF_PASS);
 $("pwd").onchange = () => { store.set("pass", $("pwd").value); if (tx) bleWrite($("pwd").value+"\n"); };
@@ -446,7 +494,7 @@ if (DEMO) {
     data = {v:"9MV",up:86400*3+t*5,ac:ac?1:0,ae:4300+t*5,st:ac?"ac_powered_charg_on":"battery_powered",pf:1,fo:-1,cr:0,rl:ac?1:0,
       is:43,vs:13.9,io:ac?41.8:-1,vo:ac?13.52:-1,wy:"start",bk:1,sc:[ac?68:31,ac?71:33],rm:ac?139:64,nm:200,ib:ac?41.8:-9.4,vb:ac?13.52:13.12,
       c0:[3392,3401,3388,3395],c1:[3388,3412,3390,3391],tp:[21,22],cy:[154,149],ld:9.6,wn:2,wf:10,tg:100,
-      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,iv:[ac?0:7,230,ac?224:0,36,0,0]};
+      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,iv:[ac?0:7,230,ac?224:0,36,0,0,65536,1,0],iq:65536,ut:Math.round(Date.now()/1000)};
     lastData = Date.now(); render();
   };
   tick(); setInterval(tick, 3000); setConn("on");
