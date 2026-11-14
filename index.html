@@ -99,7 +99,7 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
       <div class="sub" id="acSub"></div>
     </div>
     <div class="card">
-      <div class="soc"><span class="pct" id="soc">—</span><span class="sub" id="socSub">заряд батареи</span></div>
+      <div class="soc"><span class="pct" id="soc">—</span><span class="sub" id="socSub">в батарее</span></div>
       <div class="meter"><i id="meter"></i></div>
       <div class="left" id="left">—</div>
       <div class="sub" id="flow"></div>
@@ -408,6 +408,8 @@ function render(){
   const mt = $("meter"); mt.style.width = Math.max(0,Math.min(100,soc))+"%";
   mt.style.background = soc<LOW_BAD ? "var(--bad)" : soc<LOW_WARN ? "var(--warn)" : "var(--ok)";
   $("left").textContent = ac ? ("Если свет отключат — хватит на ~" + hh(leftH)) : ("Хватит примерно на " + hh(leftH));
+  /* label under percent: what the battery is doing now */
+  $("socSub").textContent = !ac ? "в батарее, разряжается" : (d.rl && d.ib > 0.5) ? "в батарее, заряжается" : "в батарее";
   let flow;
   if (ac && d.rl && d.ib > 0.5) flow = "Заряжается, " + n1(d.ib) + " А";
   else if (ac && soc >= 97) flow = "Батарея заряжена";
