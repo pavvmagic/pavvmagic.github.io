@@ -373,8 +373,11 @@ function render(){
   const soc = Math.round((d.sc[0]+d.sc[1])/2);
   const ac = !!d.ac;
   const age = d.ae + (DEMO ? 0 : Math.max(0,(Date.now()-lastData)/1000));
-  const dis = (!ac && d.ib < -0.3) ? -d.ib : d.ld;
-  const leftH = d.rm / Math.max(dis, 0.5);
+  /* remaining time by AVERAGE load: the fridge cycles, the current value jumps 3..12 A */
+  const avgI = Math.max(d.ld || 0, 0.5);
+  const nowI = (!ac && d.ib < -0.3) ? -d.ib : 0;
+  const leftH = d.rm / avgI;
+  const heavy = nowI > 15 && nowI > 2*avgI;     /* kettle, air conditioner... */
   const offLeftH = Math.max(0, d.wf - (ac?0:age/3600));
   const ovl = d.iv && d.iv[4], fault = d.iv && d.iv[5];
   const fm = d.iv ? (d.iv[6]||0) : 0, quiet = d.iv && d.iv[7], noOut = d.iv && d.iv[8];
@@ -384,6 +387,7 @@ function render(){
   /* alerts */
   const al = [];
   if (stale) al.push(["warn", tx ? "Нет свежих данных от ИБП. Проверьте пароль в «Подробно → Настройки»." : "Нет связи с ИБП. Показаны последние данные."]);
+  if (heavy) al.push(["warn","Сейчас большой расход "+n1(nowI)+" А. Если так продолжится — заряда хватит на "+hh(d.rm/nowI)+"."]);
   if (ovl) al.push(["bad","Перегрузка! Выключите мощные приборы: чайник, кондиционер, хлебопечку."]);
   if (noOut) al.push(["bad","Инвертор не выдаёт напряжение на розетки."]);
   if (fault) al.push(["bad","Инвертор: "+(bitNames(badBits)||"ошибка")+"."]);
