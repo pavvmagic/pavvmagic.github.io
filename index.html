@@ -441,7 +441,8 @@ function render(){
     ["Средний расход", n1(d.ld)+" А"],
     ["До калибровки", d.cn+"/"+d.cN+" окон, "+d.ch+"/"+d.cH+" ч"],
     ["Зарядов / калибровок / перегрузок", d.ng+" / "+d.nc+" / "+d.no],
-    ["Часы устройства", clockText()]
+    ["Часы устройства", clockText()],
+    ["Потери связи с BMS", d.bl ? (d.bl[0] ? d.bl[0]+" раз, дольше всего ~"+hm(d.bl[1]) : "нет") : "—"]
   ]);
   const hs = [];
   for (let i=0;i<Math.max(d.hn.length,d.hf.length);i++){ if (d.hn[i]!=null) hs.push(["on",d.hn[i]]); if (d.hf[i]!=null) hs.push(["off",d.hf[i]]); }
