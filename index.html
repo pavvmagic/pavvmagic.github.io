@@ -63,6 +63,12 @@ td:last-child{text-align:right}
 .cells b{font-weight:600}
 .cell{text-align:center;padding:6px 0;border-radius:8px;background:var(--bar)}
 .cell.hi{background:var(--warnbg);color:var(--warn);font-weight:700}
+.cst{display:grid;grid-template-columns:auto repeat(4,1fr);gap:6px;align-items:center;font-size:13px}
+.chip{text-align:center;padding:6px 2px;border-radius:8px;line-height:1.25}
+.chip b{display:block;font-size:12px;font-weight:600}
+.s0{background:var(--bar);color:var(--mute)} .s1,.s2{background:var(--okbg);color:var(--ok)}
+.s3{background:var(--warnbg);color:var(--warn)} .s4{background:var(--warnbg);color:var(--warn);font-weight:700}
+.s5,.s6{background:var(--badbg);color:var(--bad);font-weight:700}
 .hist{display:flex;align-items:flex-end;gap:3px;height:70px;margin-top:6px}
 .hist i{flex:1;min-width:4px;border-radius:3px 3px 0 0}
 .hist i.on{background:var(--ok)} .hist i.off{background:var(--warn)}
@@ -112,6 +118,9 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
         <table id="tChg"></table>
         <h3>Ячейки, В</h3>
         <div class="cells" id="cells"></div>
+        <h3>Состояние ячеек</h3>
+        <div class="cst" id="cst"></div>
+        <table id="tCs"></table>
         <h3>Прогноз и статистика</h3>
         <table id="tFc"></table>
         <div class="hist" id="hist"></div>
@@ -164,7 +173,7 @@ const DEMO = /[?&]demo/.test(location.search);
 const ALL  = /[?&]all/.test(location.search);   /* ?all - show every BLE device, for testing with another Espruino */
 
 let dev=null, tx=null, connecting=false, wantConn=false, writeChain=Promise.resolve();
-let needSync=false;
+let needSync=false, cellSt=null;
 let rxBuf="", lineBuf="", data=null, lastData=0, pollTm=null, hideTm=null, reTm=null, connTime=0;
 
 /* ===== log / terminal ===== */
@@ -179,7 +188,7 @@ function onRx(str){
   while ((m = rxBuf.match(/@@(\{[\s\S]*?\})@@/))) {
     const pre = rxBuf.slice(0, m.index);
     rxText(pre);
-    try { data = JSON.parse(m[1]); lastData = Date.now(); clockCheck(); render(); } catch(e){ log("JSON error: "+e.message); }
+    try { data = JSON.parse(m[1]); if (data.cs) cellSt = data.cs; lastData = Date.now(); clockCheck(); render(); } catch(e){ log("JSON error: "+e.message); }
     rxBuf = rxBuf.slice(m.index + m[0].length);
   }
   const k = rxBuf.lastIndexOf("@@");
@@ -324,8 +333,9 @@ function clockText(){
 function startPoll(){
   stopPoll();
   const p = Math.max(2, Math.min(60, +store.get("poll", 5) || 5));
-  cmd("js()");
-  pollTm = setInterval(()=>{ cmd("js()"); render(); }, p*1000);
+  let k = 0;
+  cmd("js(1)");                                  /* js(1): with cell statistics, every 6th poll */
+  pollTm = setInterval(()=>{ k++; cmd(k%6===0 ? "js(1)" : "js()"); render(); }, p*1000);
 }
 function stopPoll(){ if (pollTm) { clearInterval(pollTm); pollTm=null; } }
 
@@ -351,6 +361,10 @@ function hm(sec){
 function hh(h){ return h==null ? "—" : hm(h*3600); }
 const n1 = v => (v==null || isNaN(v)) ? "—" : (+v).toFixed(1);
 const PROF = ["стандарт","турбо","калибровка"];
+const CST = ["сбор данных","отлично","норма","наблюдение","ослаблена","деградирует","замена"];
+const CLB = {1:"ёмкость ниже: первая и вверху, и внизу", 2:"часто первая вверху", 4:"часто ниже всех на колене (наблюдение)",
+  8:"ёмкость ниже по DVA (предварительно)", 16:"резкий рост сопротивления — проверьте контакт"};
+function cellName(i){ return "Б"+((i>>2)+1)+"-"+((i&3)+1); }
 const WHY = {start:"выбран на старте", cell:"снижен: разбег ячеек", hi:"снижен: ячейка высоко", late:"повышен: не успеваем", nobms:"нет данных BMS", "":"—"};
 const STATE = {ac_powered_charg_on:"заряжает", ac_powered_charg_off:"ожидание", battery_powered:"работа от батареи", start:"запуск"};
 function rows(el, list){ el.innerHTML = list.map(([a,b])=>`<tr><td>${a}</td><td>${b}</td></tr>`).join(""); }
@@ -373,6 +387,10 @@ function render(){
   const al = [];
   if (stale) al.push(["warn", tx ? "Нет свежих данных от ИБП. Проверьте пароль в «Подробно → Настройки»." : "Нет связи с ИБП. Показаны последние данные."]);
   if (heavy) al.push(["warn","Сейчас большой расход "+n1(nowI)+" А. Если так продолжится — заряда хватит на "+hh(d.rm/nowI)+"."]);
+  if (cellSt) cellSt.c.forEach((c,i)=>{
+    if (c[1]>=6) al.push(["warn","Ячейка "+cellName(i)+" требует замены (подробно — в разделе «Состояние ячеек»)."]);
+    else if (c[3]&16) al.push(["warn","Проверьте контакт ячейки "+cellName(i)+": её сопротивление резко выросло."]);
+  });
   if (!d.bk) al.push(["warn","Нет связи с батареями (BMS). Цифры заряда могут быть неточными."]);
   if (!ac && soc < LOW_BAD) al.push(["bad","Заряд почти кончился — пора запускать генератор."]);
   else if (!ac && soc < LOW_WARN) al.push(["warn","Заряда осталось мало. Не включайте мощные приборы."]);
@@ -416,6 +434,31 @@ function render(){
         + `<span>${dv} мВ</span>`;
   });
   $("cells").innerHTML = ch + `<span></span><span style="grid-column:2/7;color:var(--mute);font-size:13px">темп. ${n1(d.tp[0])}/${n1(d.tp[1])} °C, циклы BMS ${d.cy[0]}/${d.cy[1]}</span>`;
+  if (cellSt) {
+    let g = "";
+    for (let j=0;j<2;j++){
+      g += `<b>Б${j+1}</b>`;
+      for (let i=0;i<4;i++){
+        const c = cellSt.c[j*4+i], st = c[1], dev = c[2] ? (c[2]-100) : null;
+        g += `<span class="chip s${st}"><b>${CST[st]}</b>${dev===null ? c[4]+" изм." : (dev>0?"+":"")+dev+"%"}</span>`;
+      }
+    }
+    $("cst").innerHTML = g;
+    const lr = [];
+    cellSt.c.forEach((c,i)=>{
+      const t = []; for (const k in CLB) if (c[3] & k) t.push(CLB[k]);
+      if (c[0]!==c[1]) t.push("по последним данным: "+CST[c[0]]);
+      if (t.length) lr.push([cellName(i), t.join("; ")]);
+    });
+    const sh = cellSt.sh;
+    rows($("tCs"), lr.concat([
+      ["Сопротивление, медиана", cellSt.m>0 ? (cellSt.m/1000).toFixed(2)+" мОм" : "—"],
+      ["Скачков тока учтено", cellSt.ev+" за "+cellSt.dy+" дн."],
+      ["Заряды до «колена» Б1/Б2", cellSt.nt[0]+" / "+cellSt.nt[1]],
+      ["Доля тока Б1 (заряд / разряд)", (sh[0]>=0 ? sh[0]/10+"%" : "—")+" / "+(sh[2]>=0 ? sh[2]/10+"%" : "—")
+        + (sh[1]>=0 ? " · исходно "+sh[1]/10+"% / "+(sh[3]>=0 ? sh[3]/10+"%" : "—") : "")]
+    ]));
+  }
   rows($("tFc"), [
     ["Окно света, не меньше", hh(d.wn)],
     ["Отключение, не больше", hh(d.wf)],
@@ -473,7 +516,9 @@ if (DEMO) {
     data = {v:"9MV",up:86400*3+t*5,ac:ac?1:0,ae:4300+t*5,st:ac?"ac_powered_charg_on":"battery_powered",pf:1,fo:-1,cr:0,rl:ac?1:0,
       is:43,vs:13.9,io:ac?41.8:-1,vo:ac?13.52:-1,wy:"start",bk:1,sc:[ac?68:31,ac?71:33],rm:ac?139:64,nm:200,ib:ac?41.8:-9.4,vb:ac?13.52:13.12,
       c0:[3392,3401,3388,3395],c1:[3388,3412,3390,3391],tp:[21,22],cy:[154,149],ld:9.6,wn:2,wf:10,tg:100,
-      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,ut:Math.round(Date.now()/1000)};
+      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,ut:Math.round(Date.now()/1000),
+      cs:{c:[[1,1,94,0,327],[3,3,94,2,327],[4,4,157,0,327],[1,1,94,4,327],[3,3,111,2,317],[1,1,100,0,317],[1,1,100,4,317],[0,0,0,0,12]],m:1486,nt:[8,8],nb:[0,0],ev:644,dy:8,sh:[476,476,477,477]}};
+    cellSt = data.cs;
     lastData = Date.now(); render();
   };
   tick(); setInterval(tick, 3000); setConn("on");
