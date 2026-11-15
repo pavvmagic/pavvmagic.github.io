@@ -116,8 +116,6 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
         <table id="tFc"></table>
         <div class="hist" id="hist"></div>
         <div class="legend">последние периоды: <span style="color:var(--ok)">■</span> свет, <span style="color:var(--warn)">■</span> отключение</div>
-        <h3>Инвертор</h3>
-        <table id="tInv"></table>
         <h3>Режим заряда</h3>
         <div class="btns" id="prof">
           <button class="sec sm" data-p="-1">Авто</button>
@@ -127,11 +125,6 @@ pre{background:#0d0f12;color:#9ef0b0;padding:10px;border-radius:10px;font-size:1
         </div>
         <div class="btns" style="margin-top:8px">
           <button class="sec sm" id="btnCal">Калибровать при следующем заряде</button>
-        </div>
-        <h3>Режим fault инвертора</h3>
-        <div class="btns">
-          <button class="sec sm" id="btnQuiet">Текущие флаги инвертора = режим fault (норма)</button>
-          <button class="sec sm" id="btnQuiet0">Сбросить</button>
         </div>
         <h3>Терминал</h3>
         <div class="term">
@@ -358,10 +351,6 @@ function hm(sec){
 function hh(h){ return h==null ? "—" : hm(h*3600); }
 const n1 = v => (v==null || isNaN(v)) ? "—" : (+v).toFixed(1);
 const PROF = ["стандарт","турбо","калибровка"];
-/* Q status flag bit -> text (bits treated as faults by firmware) */
-const INV_BITS = {6:"батарея разряжена",7:"отключение: батарея исчерпана",8:"перенапряжение батареи",9:"удалённое отключение",
-  13:"перегрев",14:"низкое напряжение инвертора",15:"высокое напряжение инвертора",16:"авария инвертора",17:"ошибка памяти EEPROM",18:"система отключена"};
-function bitNames(m){ const r=[]; for (const k in INV_BITS) if (m & (1<<k)) r.push(INV_BITS[k]); return r.join(", "); }
 const WHY = {start:"выбран на старте", cell:"снижен: разбег ячеек", hi:"снижен: ячейка высоко", late:"повышен: не успеваем", nobms:"нет данных BMS", "":"—"};
 const STATE = {ac_powered_charg_on:"заряжает", ac_powered_charg_off:"ожидание", battery_powered:"работа от батареи", start:"запуск"};
 function rows(el, list){ el.innerHTML = list.map(([a,b])=>`<tr><td>${a}</td><td>${b}</td></tr>`).join(""); }
@@ -379,18 +368,11 @@ function render(){
   const leftH = d.rm / avgI;
   const heavy = nowI > 15 && nowI > 2*avgI;     /* kettle, air conditioner... */
   const offLeftH = Math.max(0, d.wf - (ac?0:age/3600));
-  const ovl = d.iv && d.iv[4], fault = d.iv && d.iv[5];
-  const fm = d.iv ? (d.iv[6]||0) : 0, quiet = d.iv && d.iv[7], noOut = d.iv && d.iv[8];
-  const invOk = d.iv && !fm;          /* with fault bits the inverter readings are not valid */
-  const badBits = fm & ~(d.iq||0);
 
   /* alerts */
   const al = [];
   if (stale) al.push(["warn", tx ? "Нет свежих данных от ИБП. Проверьте пароль в «Подробно → Настройки»." : "Нет связи с ИБП. Показаны последние данные."]);
   if (heavy) al.push(["warn","Сейчас большой расход "+n1(nowI)+" А. Если так продолжится — заряда хватит на "+hh(d.rm/nowI)+"."]);
-  if (ovl) al.push(["bad","Перегрузка! Выключите мощные приборы: чайник, кондиционер, хлебопечку."]);
-  if (noOut) al.push(["bad","Инвертор не выдаёт напряжение на розетки."]);
-  if (fault) al.push(["bad","Инвертор: "+(bitNames(badBits)||"ошибка")+"."]);
   if (!d.bk) al.push(["warn","Нет связи с батареями (BMS). Цифры заряда могут быть неточными."]);
   if (!ac && soc < LOW_BAD) al.push(["bad","Заряд почти кончился — пора запускать генератор."]);
   else if (!ac && soc < LOW_WARN) al.push(["warn","Заряда осталось мало. Не включайте мощные приборы."]);
@@ -400,8 +382,7 @@ function render(){
   /* AC card */
   $("cAc").className = "card ac " + (ac ? "on" : "off");
   $("acTxt").textContent = ac ? "Свет есть" : "Света нет";
-  $("acSub").textContent = "уже " + hm(age) + (ac ? "" : " — работаем от батареи")
-    + (ac && quiet ? ". Режим fault: если свет отключат, будет пауза ~3 с" : "");
+  $("acSub").textContent = "уже " + hm(age) + (ac ? "" : " — работаем от батареи");
 
   /* battery */
   $("soc").textContent = soc + "%";
@@ -414,7 +395,7 @@ function render(){
   if (ac && d.rl && d.ib > 0.5) flow = "Заряжается, " + n1(d.ib) + " А";
   else if (ac && soc >= 97) flow = "Батарея заряжена";
   else if (ac) flow = "Ждёт, заряд не нужен";
-  else flow = "Расход " + n1(-d.ib) + " А" + (invOk ? ", нагрузка " + d.iv[0] + "%" : "");
+  else flow = "Расход " + n1(-d.ib) + " А";
   $("flow").textContent = flow;
 
   /* details */
@@ -440,7 +421,7 @@ function render(){
     ["Отключение, не больше", hh(d.wf)],
     ["Средний расход", n1(d.ld)+" А"],
     ["До калибровки", d.cn+"/"+d.cN+" окон, "+d.ch+"/"+d.cH+" ч"],
-    ["Зарядов / калибровок / перегрузок", d.ng+" / "+d.nc+" / "+d.no],
+    ["Зарядов / калибровок", d.ng+" / "+d.nc],
     ["Часы устройства", clockText()],
     ["Потери связи с BMS", d.bl ? (d.bl[0] ? d.bl[0]+" раз, дольше всего ~"+hm(d.bl[1]) : "нет") : "—"]
   ]);
@@ -448,13 +429,6 @@ function render(){
   for (let i=0;i<Math.max(d.hn.length,d.hf.length);i++){ if (d.hn[i]!=null) hs.push(["on",d.hn[i]]); if (d.hf[i]!=null) hs.push(["off",d.hf[i]]); }
   const hmax = Math.max(1,...hs.map(x=>x[1]));
   $("hist").innerHTML = hs.map(([c,v])=>`<i class="${c}" style="height:${Math.max(4,v/hmax*100)}%" title="${hh(v)}"></i>`).join("");
-  rows($("tInv"), d.iv ? [
-    ["Состояние", fault ? "ошибка: "+bitNames(badBits) : quiet ? "режим fault, это норма" : "норма"],
-    ["Флаги", fm ? bitNames(fm) : "—"],
-    ...(!invOk ? [["Показания", "недостоверны при флагах ошибки"]]
-       : ac ? [["Выход и нагрузка", "измеряются только при работе от батареи"], ["Сеть на входе", d.iv[2]+" В"], ["Температура", n1(d.iv[3])+" °C"]]
-            : [["Нагрузка", d.iv[0]+"%"], ["Выход", d.iv[1]+" В"], ["Температура", n1(d.iv[3])+" °C"]])
-  ] : [["Нет данных по RS232",""]]);
   document.querySelectorAll("#prof button").forEach(b=>{
     const p = +b.dataset.p;
     b.classList.toggle("sel", d.fo<0 ? p===-1 : p===d.fo);
@@ -472,12 +446,6 @@ document.querySelectorAll("#prof button").forEach(b=> b.onclick = () => {
   if (p===2 && !confirm("Включить калибровку (полный заряд до 14,4 В)?")) return;
   cmd("pr("+p+")"); setTimeout(()=>cmd("js()"), 500);
 });
-$("btnQuiet").onclick = () => {
-  const fm = data && data.iv ? (data.iv[6]||0) : 0;
-  if (!fm) { alert("Сейчас инвертор не сообщает ошибок. Сначала переведите его в режим fault кнопкой."); return; }
-  if (confirm("Считать нормой: "+bitNames(fm)+"?")) { cmd("invq()"); setTimeout(()=>cmd("js()"),500); }
-};
-$("btnQuiet0").onclick = () => { if (confirm("Сбросить режим fault? Эти флаги инвертора снова будут красными.")) { cmd("invq(0)"); setTimeout(()=>cmd("js()"),500); } };
 $("btnCal").onclick = () => { if (confirm("Сделать калибровку при следующем заряде?")) { cmd("cal()"); setTimeout(()=>cmd("js()"),500); } };
 $("pwd").value = store.get("pass", DEF_PASS);
 $("pwd").onchange = () => { store.set("pass", $("pwd").value); if (tx) bleWrite($("pwd").value+"\n"); };
@@ -505,7 +473,7 @@ if (DEMO) {
     data = {v:"9MV",up:86400*3+t*5,ac:ac?1:0,ae:4300+t*5,st:ac?"ac_powered_charg_on":"battery_powered",pf:1,fo:-1,cr:0,rl:ac?1:0,
       is:43,vs:13.9,io:ac?41.8:-1,vo:ac?13.52:-1,wy:"start",bk:1,sc:[ac?68:31,ac?71:33],rm:ac?139:64,nm:200,ib:ac?41.8:-9.4,vb:ac?13.52:13.12,
       c0:[3392,3401,3388,3395],c1:[3388,3412,3390,3391],tp:[21,22],cy:[154,149],ld:9.6,wn:2,wf:10,tg:100,
-      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,iv:[0,0,0,0,0,0,(1<<16)|(1<<18),1,0],iq:(1<<16)|(1<<18),ut:Math.round(Date.now()/1000)};
+      hn:[2,2,2.1,2,1.9,2,2,2],hf:[8,10,6,8.5,10,6,8,9.5],cn:4,cN:10,ch:120,cH:336,ng:57,nc:2,no:3,ut:Math.round(Date.now()/1000)};
     lastData = Date.now(); render();
   };
   tick(); setInterval(tick, 3000); setConn("on");
